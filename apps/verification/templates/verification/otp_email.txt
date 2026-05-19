@@ -1,0 +1,14 @@
+{{ app_name }} - Verify Your Email
+
+Use the verification code below to confirm your email address:
+
+    {{ code }}
+
+This code will expire in {{ expiry_minutes }} minutes.
+
+If you didn't request this code, please ignore this email.
+
+Need help? Contact us at {{ support_email }}
+
+--
+This is an automated message, please do not reply.

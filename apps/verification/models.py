@@ -1,35 +1,14 @@
 from django.db import models
 from django.utils import timezone
-from django.core.validators import RegexValidator
 from apps.core.models import AbstractBaseModel
 
 
-class PhoneVerification(AbstractBaseModel):
+class EmailVerification(AbstractBaseModel):
     """
-    Model to store phone verification OTP codes.
+    Model to store email verification OTP codes.
     """
-    VERIFICATION_METHOD_CHOICES = [
-        ('SMS', 'SMS'),
-        ('WHATSAPP', 'WhatsApp'),
-        ('VOICE', 'Voice Call'),
-    ]
-
-    phone_number = models.CharField(
-        max_length=20,
-        validators=[
-            RegexValidator(
-                regex=r'^\+?1?\d{9,15}$',
-                message="Phone number must be entered in the format: '+999999999'. Up to 15 digits allowed."
-            )
-        ],
-        db_index=True
-    )
-    code_hash = models.CharField(max_length=255)  # Hashed OTP code
-    verification_method = models.CharField(
-        max_length=10,
-        choices=VERIFICATION_METHOD_CHOICES,
-        default='SMS'
-    )
+    email = models.EmailField(db_index=True)
+    code_hash = models.CharField(max_length=255)  # Hashed OTP code (format: "salt:hash")
     expires_at = models.DateTimeField()
     attempts = models.IntegerField(default=0)
     max_attempts = models.IntegerField(default=3)
@@ -37,17 +16,17 @@ class PhoneVerification(AbstractBaseModel):
     verified_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
-        db_table = 'phone_verifications'
+        db_table = 'email_verifications'
         ordering = ['-created_at']
         indexes = [
-            models.Index(fields=['phone_number', 'created_at']),
-            models.Index(fields=['phone_number', 'is_verified']),
+            models.Index(fields=['email', 'created_at']),
+            models.Index(fields=['email', 'is_verified']),
         ]
-        verbose_name = 'Phone Verification'
-        verbose_name_plural = 'Phone Verifications'
+        verbose_name = 'Email Verification'
+        verbose_name_plural = 'Email Verifications'
 
     def __str__(self):
-        return f"{self.phone_number} - {self.verification_method}"
+        return f"{self.email} - {'verified' if self.is_verified else 'pending'}"
 
     def is_expired(self):
         """Check if verification code has expired"""
@@ -67,4 +46,3 @@ class PhoneVerification(AbstractBaseModel):
         """Increment verification attempts"""
         self.attempts += 1
         self.save(update_fields=['attempts'])
-

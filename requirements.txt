@@ -39,9 +39,6 @@ requests==2.31.0
 # Password Hashing (Argon2)
 argon2-cffi==23.1.0
 
-# Twilio for Phone Verification
-twilio==8.10.0
-
 # ASGI Support
 uvicorn[standard]==0.24.0
 

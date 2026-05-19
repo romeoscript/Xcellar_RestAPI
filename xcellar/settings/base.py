@@ -233,11 +233,7 @@ PAYSTACK_SECRET_KEY = os.environ.get('PAYSTACK_SECRET_KEY', '').strip()
 PAYSTACK_PUBLIC_KEY = os.environ.get('PAYSTACK_PUBLIC_KEY', '').strip()
 PAYSTACK_WEBHOOK_SECRET = os.environ.get('PAYSTACK_WEBHOOK_SECRET', '').strip()
 
-# Phone Verification Settings (Twilio)
-TWILIO_ACCOUNT_SID = os.environ.get('TWILIO_ACCOUNT_SID', '')
-TWILIO_AUTH_TOKEN = os.environ.get('TWILIO_AUTH_TOKEN', '')
-TWILIO_VERIFY_SERVICE_SID = os.environ.get('TWILIO_VERIFY_SERVICE_SID', '')
-TWILIO_WHATSAPP_NUMBER = os.environ.get('TWILIO_WHATSAPP_NUMBER', '')
+# Email Verification (OTP) Settings
 OTP_EXPIRY_MINUTES = int(os.environ.get('OTP_EXPIRY_MINUTES', 5))
 OTP_MAX_ATTEMPTS = int(os.environ.get('OTP_MAX_ATTEMPTS', 3))
 OTP_RATE_LIMIT_PER_HOUR = int(os.environ.get('OTP_RATE_LIMIT_PER_HOUR', 3))
@@ -286,7 +282,7 @@ SPECTACULAR_SETTINGS = {
         {'name': 'Authentication', 'description': 'User authentication and registration endpoints'},
         {'name': 'Users', 'description': 'Regular customer endpoints'},
         {'name': 'Couriers', 'description': 'Courier/driver endpoints'},
-        {'name': 'Verification', 'description': 'Phone number verification endpoints'},
+        {'name': 'Verification', 'description': 'Email verification endpoints'},
         {'name': 'FAQ', 'description': 'Frequently asked questions endpoints'},
         {'name': 'Help', 'description': 'Help and support request endpoints'},
         {'name': 'Payments', 'description': 'Payment and transaction endpoints'},
