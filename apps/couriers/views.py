@@ -485,5 +485,29 @@ def courier_dashboard(request):
     Courier dashboard endpoint.
     GET /api/v1/couriers/dashboard/
     """
-    return success_response(data={'courier': request.user.email}, message='Courier dashboard')
+    from apps.orders.models import Order
+    from apps.orders.serializers import OrderListSerializer
+
+    user = request.user
+    profile = getattr(user, 'courier_profile', None)
+    assigned = Order.objects.filter(assigned_courier=user)
+    active_statuses = ['ACCEPTED', 'PICKED_UP', 'IN_TRANSIT']
+
+    # Count open offers waiting for this courier (JSON membership -> Python side).
+    open_offers = Order.objects.filter(status='AVAILABLE', assigned_courier__isnull=True)[:100]
+    available_requests = sum(
+        1 for o in open_offers if user.id in (o.offered_to_couriers or [])
+    )
+
+    data = {
+        'email': user.email,
+        'balance': str(profile.balance) if profile else '0.00',
+        'is_available': profile.is_available if profile else False,
+        'active_deliveries': assigned.filter(status__in=active_statuses).count(),
+        'completed_deliveries': assigned.filter(status='DELIVERED').count(),
+        'total_deliveries': assigned.count(),
+        'available_requests': available_requests,
+        'recent_deliveries': OrderListSerializer(assigned[:5], many=True).data,
+    }
+    return success_response(data=data, message='Courier dashboard')
 

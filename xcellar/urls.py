@@ -25,6 +25,7 @@ urlpatterns = [
     path('api/v1/core/', include('apps.core.urls')),
     path('api/v1/orders/', include('apps.orders.urls')),
     path('api/v1/marketplace/', include('apps.marketplace.urls')),
+    path('api/v1/automation/', include('apps.automation.urls')),
     
     # Password reset web pages
     path('reset-password/', include('apps.accounts.password_reset.urls')),

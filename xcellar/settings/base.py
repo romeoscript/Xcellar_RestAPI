@@ -48,6 +48,7 @@ INSTALLED_APPS = [
     'apps.payments',
     'apps.orders',
     'apps.marketplace',
+    'apps.automation',
     'django_celery_beat',  # Celery Beat scheduler
 ]
 

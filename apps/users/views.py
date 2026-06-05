@@ -5,6 +5,11 @@ from django_ratelimit.decorators import ratelimit
 from drf_spectacular.utils import extend_schema, OpenApiExample
 
 from apps.core.permissions import IsUser
+from apps.orders.models import Order
+from apps.orders.serializers import OrderListSerializer
+
+# Statuses where an order is in flight (placed, being matched, or en route).
+ACTIVE_ORDER_STATUSES = ['AVAILABLE', 'ASSIGNED', 'ACCEPTED', 'PICKED_UP', 'IN_TRANSIT']
 
 
 @extend_schema(
@@ -44,5 +49,19 @@ def user_dashboard(request):
     User dashboard endpoint.
     GET /api/v1/users/dashboard/
     """
-    return success_response(data={'user': request.user.email}, message='User dashboard')
+    user = request.user
+    profile = getattr(user, 'user_profile', None)
+    orders = Order.objects.filter(sender=user)
+
+    data = {
+        'email': user.email,
+        'balance': str(profile.balance) if profile else '0.00',
+        'total_orders': orders.count(),
+        'active_orders': orders.filter(status__in=ACTIVE_ORDER_STATUSES).count(),
+        'pending_orders': orders.filter(status='PENDING').count(),
+        'delivered_orders': orders.filter(status='DELIVERED').count(),
+        'cancelled_orders': orders.filter(status='CANCELLED').count(),
+        'recent_orders': OrderListSerializer(orders[:5], many=True).data,
+    }
+    return success_response(data=data, message='User dashboard')
 

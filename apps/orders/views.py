@@ -8,7 +8,6 @@ from django.utils import timezone
 from django.db import transaction as db_transaction
 from django.db.models import Q
 from django_ratelimit.decorators import ratelimit
-import random
 import logging
 
 from apps.orders.models import Order, TrackingHistory
@@ -20,7 +19,7 @@ from apps.orders.serializers import (
     TrackingHistorySerializer,
     PublicOrderTrackingSerializer
 )
-from apps.orders.pricing import quote_delivery
+from apps.orders.pricing import quote_delivery, haversine_km
 from apps.core.permissions import IsUser, IsCourier
 from apps.accounts.models import User
 
@@ -113,6 +112,90 @@ def quote_order(request):
 
 @extend_schema(
     tags=['Orders'],
+    summary='Cancel Order',
+    description='Cancel an order before pickup. If it was already paid, the amount is refunded to the wallet.',
+    responses={200: OrderDetailSerializer},
+)
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, IsUser])
+def cancel_order(request, order_id):
+    """Cancel an order (sender only) and refund to wallet if it was paid."""
+    import uuid
+    from decimal import Decimal
+    from django.db.models import F
+    from apps.payments.models import Transaction, Notification
+
+    try:
+        order = Order.objects.get(id=order_id, sender=request.user)
+    except Order.DoesNotExist:
+        return not_found_response('Order not found. Please check the order ID and try again.')
+
+    # Only cancellable before a courier has picked it up.
+    cancellable = ['PENDING', 'AVAILABLE', 'ASSIGNED']
+    if order.status not in cancellable:
+        return error_response(
+            f'This order can no longer be cancelled (status: {order.get_status_display()}).',
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    refunded_amount = Decimal('0.00')
+    with db_transaction.atomic():
+        # Refund to the sender's wallet if the order was already paid.
+        if order.payment_status == 'PAID':
+            profile = getattr(request.user, 'user_profile', None)
+            if profile:
+                profile.__class__.objects.filter(pk=profile.pk).update(
+                    balance=F('balance') + order.total_amount
+                )
+                profile.refresh_from_db()
+                refunded_amount = order.total_amount
+
+                txn = Transaction.objects.create(
+                    user=request.user,
+                    transaction_type='DEPOSIT',
+                    status='SUCCESS',
+                    payment_method='PAYSTACK_BALANCE',
+                    amount=order.total_amount,
+                    net_amount=order.total_amount,
+                    reference=f'REFUND-{uuid.uuid4().hex[:20].upper()}',
+                    description=f'Refund for cancelled order {order.order_number}',
+                    completed_at=timezone.now(),
+                    metadata={'order_id': order.id, 'order_number': order.order_number},
+                )
+                Notification.objects.create(
+                    user=request.user,
+                    notification_type='DEPOSIT_RECEIVED',
+                    title='Order Refunded',
+                    message=f'You were refunded ₦{order.total_amount:,.2f} for cancelled order {order.order_number}',
+                    related_transaction=txn,
+                    metadata={'order_number': order.order_number},
+                )
+            order.payment_status = 'REFUNDED'
+
+        order.status = 'CANCELLED'
+        order.cancelled_at = timezone.now()
+        order.save()
+
+        TrackingHistory.objects.create(
+            order=order,
+            status='CANCELLED',
+            notes='Order cancelled by sender' + (
+                f'; ₦{refunded_amount:,.2f} refunded to wallet'
+                if refunded_amount > 0 else ''
+            ),
+        )
+
+    return success_response(
+        data={
+            'order': OrderDetailSerializer(order).data,
+            'refunded_amount': str(refunded_amount),
+        },
+        message='Order cancelled successfully',
+    )
+
+
+@extend_schema(
+    tags=['Orders'],
     summary='Confirm Order',
     description='Confirm order and make it available to couriers',
     responses={200: OrderDetailSerializer}
@@ -148,18 +231,41 @@ def confirm_order(request, order_id):
     return success_response(data=OrderDetailSerializer(order).data, message='Order confirmed successfully')
 
 
+def _courier_distance_km(order, courier):
+    """Distance (km) from the order's pickup point to a courier's last known
+    location, or None when either coordinate is unavailable."""
+    profile = getattr(courier, 'courier_profile', None)
+    loc = getattr(profile, 'current_location', None) or {}
+    lat = loc.get('latitude', loc.get('lat'))
+    lng = loc.get('longitude', loc.get('lng'))
+    if (lat is None or lng is None or
+            order.pickup_latitude is None or order.pickup_longitude is None):
+        return None
+    try:
+        return haversine_km(order.pickup_latitude, order.pickup_longitude, lat, lng)
+    except (TypeError, ValueError):
+        return None
+
+
 def assign_order_to_couriers(order):
     """
-    Assign order to available couriers for pickup.
-    Selects up to 5 random active couriers.
+    Offer the order to the nearest available couriers.
+
+    Couriers are ranked by distance from the pickup location (using their last
+    known location). Those who have marked themselves available are preferred;
+    couriers without a known location are considered last so the system still
+    works before location sharing is widespread.
     """
-    # Get available couriers
-    available_couriers = User.objects.filter(
-        user_type='COURIER',
-        is_active=True
-    ).exclude(id__in=order.offered_to_couriers or [])
-    
-    if not available_couriers.exists():
+    available_couriers = list(
+        User.objects.filter(
+            user_type='COURIER',
+            is_active=True,
+        )
+        .exclude(id__in=order.offered_to_couriers or [])
+        .select_related('courier_profile')
+    )
+
+    if not available_couriers:
         # Create tracking entry noting no couriers available
         TrackingHistory.objects.create(
             order=order,
@@ -167,11 +273,25 @@ def assign_order_to_couriers(order):
             notes='Order available but no couriers currently available'
         )
         return
-    
-    # Select up to 5 random couriers
-    num_to_select = min(5, available_couriers.count())
-    selected_couriers = random.sample(list(available_couriers), num_to_select)
-    
+
+    # Prefer couriers who flagged themselves available; fall back to all active.
+    preferred = [
+        c for c in available_couriers
+        if getattr(getattr(c, 'courier_profile', None), 'is_available', False)
+    ]
+    pool = preferred or available_couriers
+
+    # Rank by proximity to pickup; couriers with no location go to the back.
+    def sort_key(courier):
+        distance = _courier_distance_km(order, courier)
+        return (0, distance) if distance is not None else (1, 0.0)
+
+    pool.sort(key=sort_key)
+
+    # Offer to the nearest few couriers.
+    num_to_select = min(5, len(pool))
+    selected_couriers = pool[:num_to_select]
+
     order.offered_to_couriers = [c.id for c in selected_couriers]
     order.offer_expires_at = timezone.now() + timezone.timedelta(hours=24)
     order.save()
