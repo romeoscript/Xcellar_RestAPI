@@ -17,13 +17,38 @@ from apps.orders.serializers import (
     OrderListSerializer,
     OrderDetailSerializer,
     TrackingHistorySerializer,
-    PublicOrderTrackingSerializer
+    PublicOrderTrackingSerializer,
+    RatingSerializer,
+    RatingCreateSerializer,
 )
+from apps.orders.models import Rating
 from apps.orders.pricing import quote_delivery, haversine_km
 from apps.core.permissions import IsUser, IsCourier
 from apps.accounts.models import User
 
 logger = logging.getLogger(__name__)
+
+# Human-readable labels + icon keywords for tracking-timeline entries.
+STATUS_DISPLAY = {
+    'PENDING': 'Order Placed',
+    'AVAILABLE': 'Finding Courier',
+    'ASSIGNED': 'Courier Assigned',
+    'ACCEPTED': 'Courier Accepted',
+    'PICKED_UP': 'Picked Up',
+    'IN_TRANSIT': 'In Transit',
+    'DELIVERED': 'Delivered',
+    'CANCELLED': 'Cancelled',
+}
+STATUS_ICON = {
+    'PENDING': 'receipt',
+    'AVAILABLE': 'search',
+    'ASSIGNED': 'person',
+    'ACCEPTED': 'check',
+    'PICKED_UP': 'inventory',
+    'IN_TRANSIT': 'local_shipping',
+    'DELIVERED': 'done_all',
+    'CANCELLED': 'cancel',
+}
 
 
 @extend_schema(
@@ -112,6 +137,55 @@ def quote_order(request):
 
 @extend_schema(
     tags=['Orders'],
+    summary='Rate Order',
+    description='Rate the courier for a delivered order (sender only, once per order).',
+    request=RatingCreateSerializer,
+    responses={201: RatingSerializer},
+)
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, IsUser])
+def rate_order(request, order_id):
+    """Submit a courier rating for a delivered order."""
+    try:
+        order = Order.objects.get(id=order_id, sender=request.user)
+    except Order.DoesNotExist:
+        return not_found_response('Order not found. Please check the order ID and try again.')
+
+    if order.status != 'DELIVERED':
+        return error_response(
+            'You can only rate an order after it has been delivered.',
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+    if not order.assigned_courier:
+        return error_response(
+            'This order has no assigned courier to rate.',
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+    if hasattr(order, 'rating'):
+        return error_response(
+            'You have already rated this order.',
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    serializer = RatingCreateSerializer(data=request.data)
+    if not serializer.is_valid():
+        return validation_error_response(serializer.errors, message='Validation error')
+
+    rating = Rating.objects.create(
+        order=order,
+        rater=request.user,
+        courier=order.assigned_courier,
+        score=serializer.validated_data['score'],
+        comment=serializer.validated_data.get('comment', ''),
+    )
+    return created_response(
+        data={'rating': RatingSerializer(rating).data},
+        message='Rating submitted successfully',
+    )
+
+
+@extend_schema(
+    tags=['Orders'],
     summary='Cancel Order',
     description='Cancel an order before pickup. If it was already paid, the amount is refunded to the wallet.',
     responses={200: OrderDetailSerializer},
@@ -191,6 +265,61 @@ def cancel_order(request, order_id):
             'refunded_amount': str(refunded_amount),
         },
         message='Order cancelled successfully',
+    )
+
+
+@extend_schema(
+    tags=['Orders'],
+    summary='Update Courier Location',
+    description='Assigned courier posts their live GPS location for an in-progress order. Updates current location and appends to tracking history.',
+)
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, IsCourier])
+def update_courier_location(request, order_id):
+    """Assigned courier pushes a live location ping for an active order."""
+    try:
+        order = Order.objects.get(id=order_id, assigned_courier=request.user)
+    except Order.DoesNotExist:
+        return not_found_response('Order not found or not assigned to you.')
+
+    lat = request.data.get('latitude')
+    lng = request.data.get('longitude')
+    if lat is None or lng is None:
+        return error_response(
+            'latitude and longitude are required.',
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # Only meaningful while the parcel is actively being delivered.
+    if order.status not in ['ACCEPTED', 'PICKED_UP', 'IN_TRANSIT']:
+        return error_response(
+            f'Location updates are only accepted for active deliveries (status: {order.get_status_display()}).',
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    note = request.data.get('note', 'Courier location update')
+
+    # Reflect on the order and the courier profile (drives proximity matching).
+    order.current_location = f'{lat},{lng}'
+    order.save(update_fields=['current_location', 'updated_at'])
+
+    profile = getattr(request.user, 'courier_profile', None)
+    if profile:
+        profile.current_location = {'latitude': float(lat), 'longitude': float(lng)}
+        profile.save(update_fields=['current_location', 'updated_at'])
+
+    TrackingHistory.objects.create(
+        order=order,
+        status=order.status,
+        location=str(note),
+        latitude=lat,
+        longitude=lng,
+        notes=note,
+    )
+
+    return success_response(
+        data={'order': PublicOrderTrackingSerializer(order).data},
+        message='Location updated',
     )
 
 
@@ -381,9 +510,35 @@ def track_order(request, order_id):
     elif user.user_type == 'COURIER' and order.assigned_courier != user:
         return error_response('You do not have permission to access this order.', status_code=status.HTTP_403_FORBIDDEN)
     
-    tracking = order.tracking_history.all()
-    serializer = TrackingHistorySerializer(tracking, many=True)
-    return success_response(data={'tracking_history': serializer.data})
+    # Oldest-first timeline for display.
+    tracking = order.tracking_history.all().order_by('created_at')
+    timeline = [
+        {
+            'date': th.created_at.isoformat(),
+            'status': th.status,
+            'status_display': STATUS_DISPLAY.get(th.status, th.status),
+            'icon': STATUS_ICON.get(th.status, 'circle'),
+            'message': th.notes or '',
+            'location': th.location or None,
+        }
+        for th in tracking
+    ]
+
+    return success_response(
+        data={
+            'tracking_number': order.tracking_number,
+            'pickup_address': order.pickup_address,
+            'dropoff_address': order.dropoff_address,
+            'recipient_name': order.recipient_name,
+            'estimated_delivery': order.estimated_delivery_time.isoformat()
+                if order.estimated_delivery_time else None,
+            'current_status': order.status,
+            'current_status_display': order.get_status_display(),
+            'current_location': order.current_location or None,
+            'timeline': timeline,
+        },
+        message='Tracking information',
+    )
 
 
 @extend_schema(

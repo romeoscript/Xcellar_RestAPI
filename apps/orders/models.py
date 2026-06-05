@@ -1,5 +1,6 @@
 from django.db import models
 from django.conf import settings
+from django.core.validators import MinValueValidator, MaxValueValidator
 from decimal import Decimal
 from apps.core.models import AbstractBaseModel
 
@@ -153,4 +154,41 @@ class TrackingHistory(AbstractBaseModel):
     
     def __str__(self):
         return f"{self.order.order_number} - {self.status} - {self.created_at}"
+
+
+class Rating(AbstractBaseModel):
+    """
+    A sender's rating of the courier for a completed (delivered) order.
+    One rating per order.
+    """
+    order = models.OneToOneField(
+        'Order',
+        on_delete=models.CASCADE,
+        related_name='rating'
+    )
+    rater = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='given_ratings'
+    )
+    courier = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='received_ratings',
+        limit_choices_to={'user_type': 'COURIER'}
+    )
+    score = models.PositiveSmallIntegerField(
+        validators=[MinValueValidator(1), MaxValueValidator(5)],
+        help_text='Rating from 1 to 5'
+    )
+    comment = models.TextField(blank=True)
+
+    class Meta:
+        db_table = 'order_ratings'
+        ordering = ['-created_at']
+        verbose_name = 'Rating'
+        verbose_name_plural = 'Ratings'
+
+    def __str__(self):
+        return f"{self.order.order_number} - {self.score}/5"
 

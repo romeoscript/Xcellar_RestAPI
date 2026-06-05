@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from apps.orders.models import Order, TrackingHistory
+from apps.orders.models import Order, TrackingHistory, Rating
 
 
 class OrderCreateSerializer(serializers.ModelSerializer):
@@ -40,6 +40,27 @@ class OrderCreateSerializer(serializers.ModelSerializer):
         if len(value) > 5:
             raise serializers.ValidationError("Maximum 5 images allowed")
         return value
+
+
+class RatingSerializer(serializers.ModelSerializer):
+    """Read/representation serializer for a rating."""
+    rater_email = serializers.EmailField(source='rater.email', read_only=True)
+    courier_email = serializers.EmailField(source='courier.email', read_only=True)
+    order_number = serializers.CharField(source='order.order_number', read_only=True)
+
+    class Meta:
+        model = Rating
+        fields = [
+            'id', 'order', 'order_number', 'rater_email', 'courier_email',
+            'score', 'comment', 'created_at',
+        ]
+        read_only_fields = fields
+
+
+class RatingCreateSerializer(serializers.Serializer):
+    """Validates the body for submitting a rating."""
+    score = serializers.IntegerField(min_value=1, max_value=5)
+    comment = serializers.CharField(required=False, allow_blank=True, default='')
 
 
 class OrderQuoteSerializer(serializers.Serializer):

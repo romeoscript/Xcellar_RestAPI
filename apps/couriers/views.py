@@ -485,6 +485,7 @@ def courier_dashboard(request):
     Courier dashboard endpoint.
     GET /api/v1/couriers/dashboard/
     """
+    from django.db.models import Avg
     from apps.orders.models import Order
     from apps.orders.serializers import OrderListSerializer
 
@@ -492,6 +493,10 @@ def courier_dashboard(request):
     profile = getattr(user, 'courier_profile', None)
     assigned = Order.objects.filter(assigned_courier=user)
     active_statuses = ['ACCEPTED', 'PICKED_UP', 'IN_TRANSIT']
+
+    rating_stats = user.received_ratings.aggregate(avg=Avg('score'))
+    average_rating = round(rating_stats['avg'], 2) if rating_stats['avg'] is not None else None
+    ratings_count = user.received_ratings.count()
 
     # Count open offers waiting for this courier (JSON membership -> Python side).
     open_offers = Order.objects.filter(status='AVAILABLE', assigned_courier__isnull=True)[:100]
@@ -507,6 +512,8 @@ def courier_dashboard(request):
         'completed_deliveries': assigned.filter(status='DELIVERED').count(),
         'total_deliveries': assigned.count(),
         'available_requests': available_requests,
+        'average_rating': average_rating,
+        'ratings_count': ratings_count,
         'recent_deliveries': OrderListSerializer(assigned[:5], many=True).data,
     }
     return success_response(data=data, message='Courier dashboard')
