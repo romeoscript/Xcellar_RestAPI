@@ -240,13 +240,24 @@ OTP_RATE_LIMIT_PER_HOUR = int(os.environ.get('OTP_RATE_LIMIT_PER_HOUR', 3))
 OTP_COOLDOWN_SECONDS = int(os.environ.get('OTP_COOLDOWN_SECONDS', 60))
 
 # Email Configuration
-EMAIL_BACKEND = os.environ.get('EMAIL_BACKEND', 'django.core.mail.backends.console.EmailBackend')
 EMAIL_HOST = os.environ.get('EMAIL_HOST', 'smtp.gmail.com')
 EMAIL_PORT = int(os.environ.get('EMAIL_PORT', 587))
 EMAIL_USE_TLS = os.environ.get('EMAIL_USE_TLS', 'True').lower() == 'true'
 EMAIL_HOST_USER = os.environ.get('EMAIL_HOST_USER', '')
 EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', '')
 DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', 'Xcellar <noreply@xcellar.com>')
+
+# Backend auto-selection: use real SMTP whenever credentials are configured,
+# otherwise fall back to printing emails to the console (local dev). This means
+# OTP / password-reset emails are actually delivered as soon as EMAIL_HOST_USER
+# and EMAIL_HOST_PASSWORD are set — no code change needed. Can still be forced
+# explicitly via the EMAIL_BACKEND environment variable.
+_default_email_backend = (
+    'django.core.mail.backends.smtp.EmailBackend'
+    if EMAIL_HOST_USER and EMAIL_HOST_PASSWORD
+    else 'django.core.mail.backends.console.EmailBackend'
+)
+EMAIL_BACKEND = os.environ.get('EMAIL_BACKEND', _default_email_backend)
 
 # Password Reset Settings
 PASSWORD_RESET_URL = os.environ.get('PASSWORD_RESET_URL', 'http://localhost:8000/reset-password')

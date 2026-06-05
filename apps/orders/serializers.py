@@ -3,8 +3,14 @@ from apps.orders.models import Order, TrackingHistory
 
 
 class OrderCreateSerializer(serializers.ModelSerializer):
-    """Serializer for creating a new order"""
-    
+    """Serializer for creating a new order.
+
+    Financial fields are READ ONLY here: fees are never accepted from the
+    client. They are computed server-side (see apps.orders.pricing) and
+    injected via serializer.save() in the view. Dropoff coordinates are
+    required so the distance-based price can be calculated.
+    """
+
     class Meta:
         model = Order
         fields = [
@@ -18,11 +24,34 @@ class OrderCreateSerializer(serializers.ModelSerializer):
             'parcel_images',
             'delivery_fee', 'service_charge', 'insurance_fee', 'total_amount',
         ]
-    
+        # Fees are authoritative server-side values, not client input.
+        read_only_fields = [
+            'delivery_fee', 'service_charge', 'insurance_fee', 'total_amount',
+        ]
+        # Coordinates are mandatory for distance-based pricing.
+        extra_kwargs = {
+            'pickup_latitude': {'required': True, 'allow_null': False},
+            'pickup_longitude': {'required': True, 'allow_null': False},
+            'dropoff_latitude': {'required': True, 'allow_null': False},
+            'dropoff_longitude': {'required': True, 'allow_null': False},
+        }
+
     def validate_parcel_images(self, value):
         if len(value) > 5:
             raise serializers.ValidationError("Maximum 5 images allowed")
         return value
+
+
+class OrderQuoteSerializer(serializers.Serializer):
+    """Validates input for a delivery price preview (no order is created)."""
+    pickup_latitude = serializers.DecimalField(max_digits=9, decimal_places=6)
+    pickup_longitude = serializers.DecimalField(max_digits=9, decimal_places=6)
+    dropoff_latitude = serializers.DecimalField(max_digits=9, decimal_places=6)
+    dropoff_longitude = serializers.DecimalField(max_digits=9, decimal_places=6)
+    parcel_weight_kg = serializers.DecimalField(
+        max_digits=8, decimal_places=2, required=False, allow_null=True)
+    parcel_financial_worth = serializers.DecimalField(
+        max_digits=12, decimal_places=2, required=False, allow_null=True)
 
 
 class OrderListSerializer(serializers.ModelSerializer):

@@ -14,11 +14,13 @@ import logging
 from apps.orders.models import Order, TrackingHistory
 from apps.orders.serializers import (
     OrderCreateSerializer,
+    OrderQuoteSerializer,
     OrderListSerializer,
     OrderDetailSerializer,
     TrackingHistorySerializer,
     PublicOrderTrackingSerializer
 )
+from apps.orders.pricing import quote_delivery
 from apps.core.permissions import IsUser, IsCourier
 from apps.accounts.models import User
 
@@ -35,20 +37,78 @@ logger = logging.getLogger(__name__)
 @api_view(['POST'])
 @permission_classes([IsAuthenticated, IsUser])
 def create_order(request):
-    """Create a new parcel order"""
+    """Create a new parcel order with server-computed fees."""
     serializer = OrderCreateSerializer(data=request.data)
     if serializer.is_valid():
-        order = serializer.save(sender=request.user, status='PENDING')
-        
+        data = serializer.validated_data
+
+        # Authoritative pricing — never trust client-supplied fees.
+        quote = quote_delivery(
+            pickup_latitude=data['pickup_latitude'],
+            pickup_longitude=data['pickup_longitude'],
+            dropoff_latitude=data['dropoff_latitude'],
+            dropoff_longitude=data['dropoff_longitude'],
+            parcel_weight_kg=data.get('parcel_weight_kg'),
+            parcel_financial_worth=data.get('parcel_financial_worth'),
+        )
+
+        order = serializer.save(
+            sender=request.user,
+            status='PENDING',
+            delivery_fee=quote['delivery_fee'],
+            service_charge=quote['service_charge'],
+            insurance_fee=quote['insurance_fee'],
+            total_amount=quote['total_amount'],
+            estimated_delivery_time=quote['estimated_delivery_time'],
+        )
+
         # Create initial tracking entry
         TrackingHistory.objects.create(
             order=order,
             status='PENDING',
             notes='Order placed successfully'
         )
-        
+
         return created_response(data={'order': OrderDetailSerializer(order).data}, message='Order created successfully')
     return validation_error_response(serializer.errors, message='Validation error')
+
+
+@extend_schema(
+    tags=['Orders'],
+    summary='Quote Delivery',
+    description='Preview the delivery fee for a pickup/dropoff pair before creating an order. No order is created.',
+    request=OrderQuoteSerializer,
+)
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, IsUser])
+def quote_order(request):
+    """Return an authoritative delivery price preview (no side effects)."""
+    serializer = OrderQuoteSerializer(data=request.data)
+    if not serializer.is_valid():
+        return validation_error_response(serializer.errors, message='Validation error')
+
+    data = serializer.validated_data
+    quote = quote_delivery(
+        pickup_latitude=data['pickup_latitude'],
+        pickup_longitude=data['pickup_longitude'],
+        dropoff_latitude=data['dropoff_latitude'],
+        dropoff_longitude=data['dropoff_longitude'],
+        parcel_weight_kg=data.get('parcel_weight_kg'),
+        parcel_financial_worth=data.get('parcel_financial_worth'),
+    )
+
+    return success_response(
+        data={
+            'distance_km': str(quote['distance_km']),
+            'delivery_fee': str(quote['delivery_fee']),
+            'service_charge': str(quote['service_charge']),
+            'insurance_fee': str(quote['insurance_fee']),
+            'total_amount': str(quote['total_amount']),
+            'estimated_minutes': quote['estimated_minutes'],
+            'estimated_delivery_time': quote['estimated_delivery_time'].isoformat(),
+        },
+        message='Delivery quote calculated',
+    )
 
 
 @extend_schema(

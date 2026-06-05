@@ -1,6 +1,7 @@
 from django.urls import path
 from apps.orders.views import (
     create_order,
+    quote_order,
     confirm_order,
     list_orders,
     order_detail,
@@ -19,6 +20,7 @@ urlpatterns = [
     # User endpoints
     path('upload-image/', upload_parcel_image, name='upload_parcel_image'),
     path('create/', create_order, name='create_order'),
+    path('quote/', quote_order, name='quote_order'),
     path('<int:order_id>/confirm/', confirm_order, name='confirm_order'),
     path('list/', list_orders, name='list_orders'),
     path('<int:order_id>/', order_detail, name='order_detail'),
