@@ -485,5 +485,37 @@ def courier_dashboard(request):
     Courier dashboard endpoint.
     GET /api/v1/couriers/dashboard/
     """
-    return success_response(data={'courier': request.user.email}, message='Courier dashboard')
+    from django.db.models import Avg
+    from apps.orders.models import Order
+    from apps.orders.serializers import OrderListSerializer
+
+    user = request.user
+    profile = getattr(user, 'courier_profile', None)
+    assigned = Order.objects.filter(assigned_courier=user)
+    active_statuses = ['ACCEPTED', 'PICKED_UP', 'IN_TRANSIT']
+
+    rating_stats = user.received_ratings.aggregate(avg=Avg('score'))
+    average_rating = round(rating_stats['avg'], 2) if rating_stats['avg'] is not None else None
+    ratings_count = user.received_ratings.count()
+
+    # Open offers waiting for this courier, counted DB-side via JSON containment.
+    available_requests = Order.objects.filter(
+        status='AVAILABLE',
+        assigned_courier__isnull=True,
+        offered_to_couriers__contains=[user.id],
+    ).count()
+
+    data = {
+        'email': user.email,
+        'balance': str(profile.balance) if profile else '0.00',
+        'is_available': profile.is_available if profile else False,
+        'active_deliveries': assigned.filter(status__in=active_statuses).count(),
+        'completed_deliveries': assigned.filter(status='DELIVERED').count(),
+        'total_deliveries': assigned.count(),
+        'available_requests': available_requests,
+        'average_rating': average_rating,
+        'ratings_count': ratings_count,
+        'recent_deliveries': OrderListSerializer(assigned[:5], many=True).data,
+    }
+    return success_response(data=data, message='Courier dashboard')
 
