@@ -20,6 +20,7 @@ from apps.orders.serializers import (
     PublicOrderTrackingSerializer,
     RatingSerializer,
     RatingCreateSerializer,
+    CourierLocationSerializer,
 )
 from apps.orders.models import Rating
 from apps.orders.pricing import quote_delivery, haversine_km
@@ -199,21 +200,22 @@ def cancel_order(request, order_id):
     from django.db.models import F
     from apps.payments.models import Transaction, Notification
 
-    try:
-        order = Order.objects.get(id=order_id, sender=request.user)
-    except Order.DoesNotExist:
+    if not Order.objects.filter(id=order_id, sender=request.user).exists():
         return not_found_response('Order not found. Please check the order ID and try again.')
 
-    # Only cancellable before a courier has picked it up.
     cancellable = ['PENDING', 'AVAILABLE', 'ASSIGNED']
-    if order.status not in cancellable:
-        return error_response(
-            f'This order can no longer be cancelled (status: {order.get_status_display()}).',
-            status_code=status.HTTP_400_BAD_REQUEST,
-        )
-
     refunded_amount = Decimal('0.00')
     with db_transaction.atomic():
+        # Lock the row so two concurrent cancels can't both refund.
+        order = Order.objects.select_for_update().get(id=order_id, sender=request.user)
+
+        # Only cancellable before a courier has picked it up.
+        if order.status not in cancellable:
+            return error_response(
+                f'This order can no longer be cancelled (status: {order.get_status_display()}).',
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+
         # Refund to the sender's wallet if the order was already paid.
         if order.payment_status == 'PAID':
             profile = getattr(request.user, 'user_profile', None)
@@ -244,7 +246,7 @@ def cancel_order(request, order_id):
                     related_transaction=txn,
                     metadata={'order_number': order.order_number},
                 )
-            order.payment_status = 'REFUNDED'
+                order.payment_status = 'REFUNDED'
 
         order.status = 'CANCELLED'
         order.cancelled_at = timezone.now()
@@ -282,13 +284,9 @@ def update_courier_location(request, order_id):
     except Order.DoesNotExist:
         return not_found_response('Order not found or not assigned to you.')
 
-    lat = request.data.get('latitude')
-    lng = request.data.get('longitude')
-    if lat is None or lng is None:
-        return error_response(
-            'latitude and longitude are required.',
-            status_code=status.HTTP_400_BAD_REQUEST,
-        )
+    serializer = CourierLocationSerializer(data=request.data)
+    if not serializer.is_valid():
+        return validation_error_response(serializer.errors, message='Validation error')
 
     # Only meaningful while the parcel is actively being delivered.
     if order.status not in ['ACCEPTED', 'PICKED_UP', 'IN_TRANSIT']:
@@ -297,7 +295,9 @@ def update_courier_location(request, order_id):
             status_code=status.HTTP_400_BAD_REQUEST,
         )
 
-    note = request.data.get('note', 'Courier location update')
+    lat = serializer.validated_data['latitude']
+    lng = serializer.validated_data['longitude']
+    note = serializer.validated_data['note']
 
     # Reflect on the order and the courier profile (drives proximity matching).
     order.current_location = f'{lat},{lng}'

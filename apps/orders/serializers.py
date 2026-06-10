@@ -63,6 +63,15 @@ class RatingCreateSerializer(serializers.Serializer):
     comment = serializers.CharField(required=False, allow_blank=True, default='')
 
 
+class CourierLocationSerializer(serializers.Serializer):
+    """Validates a courier's live location ping."""
+    latitude = serializers.DecimalField(max_digits=9, decimal_places=6)
+    longitude = serializers.DecimalField(max_digits=9, decimal_places=6)
+    note = serializers.CharField(
+        required=False, allow_blank=True, default='Courier location update'
+    )
+
+
 class OrderQuoteSerializer(serializers.Serializer):
     """Validates input for a delivery price preview (no order is created)."""
     pickup_latitude = serializers.DecimalField(max_digits=9, decimal_places=6)
