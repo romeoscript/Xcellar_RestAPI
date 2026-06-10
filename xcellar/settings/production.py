@@ -37,19 +37,30 @@ X_FRAME_OPTIONS = 'DENY'
 
 CSRF_TRUSTED_ORIGINS = ['https://xcellarrestapi-production.up.railway.app']
 
-# Cache - Use local memory instead of Redis (since Redis is not available)
-CACHES = {
-    'default': {
-        'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
-        'LOCATION': 'unique-snowflake',
+# Cache + rate limiting. Use Redis (shared across instances) when REDIS_URL is
+# set, so login/OTP rate limiting is enforced. Falls back to local-memory cache
+# with rate limiting disabled when Redis isn't configured.
+REDIS_URL = os.environ.get('REDIS_URL')
+if REDIS_URL:
+    CACHES = {
+        'default': {
+            'BACKEND': 'django_redis.cache.RedisCache',
+            'LOCATION': REDIS_URL,
+            'OPTIONS': {'CLIENT_CLASS': 'django_redis.client.DefaultClient'},
+        }
     }
-}
+    RATELIMIT_ENABLE = True
+else:
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+            'LOCATION': 'unique-snowflake',
+        }
+    }
+    RATELIMIT_ENABLE = False
 
-# Session - Use database-backed sessions instead of cache
+# Session - database-backed (independent of the cache backend)
 SESSION_ENGINE = 'django.contrib.sessions.backends.db'
-
-# Disable rate limiting (depends on Redis cache)
-RATELIMIT_ENABLE = False
 
 # Celery - Disable Redis broker/backend (Redis not available)
 CELERY_BROKER_URL = None
