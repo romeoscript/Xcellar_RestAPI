@@ -5,7 +5,7 @@ from rest_framework.permissions import IsAuthenticated, AllowAny
 from apps.core.response import success_response, error_response, created_response, validation_error_response, not_found_response
 from drf_spectacular.utils import extend_schema, OpenApiExample
 from django.utils import timezone
-from django.db import transaction as db_transaction
+from django.db import transaction as db_transaction, IntegrityError
 from django.db.models import Q
 from django_ratelimit.decorators import ratelimit
 import logging
@@ -172,13 +172,20 @@ def rate_order(request, order_id):
     if not serializer.is_valid():
         return validation_error_response(serializer.errors, message='Validation error')
 
-    rating = Rating.objects.create(
-        order=order,
-        rater=request.user,
-        courier=order.assigned_courier,
-        score=serializer.validated_data['score'],
-        comment=serializer.validated_data.get('comment', ''),
-    )
+    try:
+        rating = Rating.objects.create(
+            order=order,
+            rater=request.user,
+            courier=order.assigned_courier,
+            score=serializer.validated_data['score'],
+            comment=serializer.validated_data.get('comment', ''),
+        )
+    except IntegrityError:
+        # Lost a race against a concurrent rating for the same order.
+        return error_response(
+            'You have already rated this order.',
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
     return created_response(
         data={'rating': RatingSerializer(rating).data},
         message='Rating submitted successfully',
@@ -355,7 +362,7 @@ def confirm_order(request, order_id):
         notes='Order confirmed and sent to couriers'
     )
     
-    # Assign to couriers (simple random selection)
+    # Offer the order to the nearest available couriers.
     assign_order_to_couriers(order)
     return success_response(data=OrderDetailSerializer(order).data, message='Order confirmed successfully')
 

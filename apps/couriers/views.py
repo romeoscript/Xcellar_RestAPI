@@ -498,11 +498,12 @@ def courier_dashboard(request):
     average_rating = round(rating_stats['avg'], 2) if rating_stats['avg'] is not None else None
     ratings_count = user.received_ratings.count()
 
-    # Count open offers waiting for this courier (JSON membership -> Python side).
-    open_offers = Order.objects.filter(status='AVAILABLE', assigned_courier__isnull=True)[:100]
-    available_requests = sum(
-        1 for o in open_offers if user.id in (o.offered_to_couriers or [])
-    )
+    # Open offers waiting for this courier, counted DB-side via JSON containment.
+    available_requests = Order.objects.filter(
+        status='AVAILABLE',
+        assigned_courier__isnull=True,
+        offered_to_couriers__contains=[user.id],
+    ).count()
 
     data = {
         'email': user.email,
