@@ -64,8 +64,24 @@ STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 # For persistent media storage, consider using AWS S3 or Cloudinary.
 WHITENOISE_USE_FINDERS = True
 
-# Ensure media directory exists
+# Ensure media directory exists (used only when object storage is not configured)
 import os as os_module
 MEDIA_ROOT_PATH = os_module.path.join(BASE_DIR, 'media')
 if not os_module.path.exists(MEDIA_ROOT_PATH):
     os_module.makedirs(MEDIA_ROOT_PATH, exist_ok=True)
+
+# Media files — use S3-compatible object storage (MinIO / R2 / S3) when a bucket
+# is configured, so user uploads (KYC docs, parcel images) survive restarts.
+# Falls back to the local filesystem above when AWS_STORAGE_BUCKET_NAME is unset.
+AWS_STORAGE_BUCKET_NAME = os.environ.get('AWS_STORAGE_BUCKET_NAME')
+if AWS_STORAGE_BUCKET_NAME:
+    DEFAULT_FILE_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
+    AWS_ACCESS_KEY_ID = os.environ.get('AWS_ACCESS_KEY_ID')
+    AWS_SECRET_ACCESS_KEY = os.environ.get('AWS_SECRET_ACCESS_KEY')
+    AWS_S3_ENDPOINT_URL = os.environ.get('AWS_S3_ENDPOINT_URL')
+    AWS_S3_REGION_NAME = os.environ.get('AWS_S3_REGION_NAME', 'us-east-1')
+    # MinIO requires path-style addressing; private files via presigned URLs.
+    AWS_S3_ADDRESSING_STYLE = 'path'
+    AWS_QUERYSTRING_AUTH = os.environ.get('AWS_QUERYSTRING_AUTH', 'True') == 'True'
+    AWS_S3_FILE_OVERWRITE = False
+    AWS_DEFAULT_ACL = None
