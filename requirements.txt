@@ -8,6 +8,7 @@ drf-spectacular==0.27.0
 
 # Database
 psycopg2-binary==2.9.9
+dj-database-url==2.3.0
 
 # Image Processing
 Pillow==10.1.0
